@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 async def main():
     await bot.set_my_commands([
         BotCommand(command="start", description="Главное меню"),
+        BotCommand(command="history", description="Последние 5 песен"),
         BotCommand(command="cancel", description="Отменить"),
     ], scope=BotCommandScopeDefault())
     logger.info("AudioEditor запущен")
