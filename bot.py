@@ -19,6 +19,12 @@ async def main():
         BotCommand(command="history", description="Последние 5 песен"),
         BotCommand(command="cancel", description="Отменить"),
     ], scope=BotCommandScopeDefault())
+    try:
+        await bot.set_my_name(name="MediaShtormBot")
+        await bot.set_my_description(description="🎵 Редактор MP3: меняй название, исполнителя и обложку прямо в памяти. Пакетная обработка, история изменений.")
+        await bot.set_my_short_description(short_description="🎵 Редактор MP3 — меняй название, исполнителя и обложку")
+    except Exception as e:
+        logger.warning("Не удалось установить имя/описание бота: %s", e)
     logger.info("AudioEditor запущен")
     await dp.start_polling(bot)
 

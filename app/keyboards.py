@@ -16,5 +16,6 @@ batch_add_kb = InlineKeyboardMarkup(inline_keyboard=[
 batch_edit_kb = InlineKeyboardMarkup(inline_keyboard=[
     [InlineKeyboardButton(text="✏️ Название (для всех)", callback_data="batch_edit_title")],
     [InlineKeyboardButton(text="✏️ Исполнитель (для всех)", callback_data="batch_edit_artist")],
+    [InlineKeyboardButton(text="🖼 Обложка (для всех)", callback_data="batch_edit_cover")],
     [InlineKeyboardButton(text="📤 Отправить всё", callback_data="batch_send")],
 ])

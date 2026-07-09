@@ -232,11 +232,27 @@ async def batch_done_cb(cb: CallbackQuery, state: FSMContext):
         await cb.message.edit_text("❌ Нет файлов в очереди")
         await state.clear()
         return
-    await state.update_data(batch_title="", batch_artist="")
-    await cb.message.edit_text(
-        f"📁 {len(files)} файлов\n\nТеперь укажи название и исполнителя для всех:",
-        reply_markup=batch_edit_kb
+    await state.update_data(batch_title="", batch_artist="", batch_cover=None)
+    await state.set_state(None)
+    await _show_batch_status(cb.message, state)
+
+
+async def _show_batch_status(msg: Message | CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    files = data.get("batch_files", [])
+    title = data.get("batch_title", "")
+    artist = data.get("batch_artist", "")
+    cover = data.get("batch_cover")
+    cover_text = "✅" if cover else "—"
+    text = (
+        f"📁 <b>{len(files)} файлов</b>\n"
+        f"Название: <b>{title or '—'}</b>\n"
+        f"Исполнитель: <b>{artist or '—'}</b>\n"
+        f"🖼 Обложка: <b>{cover_text}</b>"
     )
+    if isinstance(msg, CallbackQuery):
+        msg = msg.message
+    await msg.edit_text(text, reply_markup=batch_edit_kb)
 
 
 # ─── Batch: edit metadata ───
@@ -251,14 +267,9 @@ async def batch_edit_title_cb(cb: CallbackQuery, state: FSMContext):
 @dp.message(BatchProcess.waiting_for_title)
 async def batch_process_title(msg: Message, state: FSMContext):
     await state.update_data(batch_title=msg.text)
-    data = await state.get_data()
-    files = data.get("batch_files", [])
-    title = data.get("batch_title", "")
-    artist = data.get("batch_artist", "")
-    await msg.answer(
-        f"📁 {len(files)} файлов\nНазвание: <b>{title or '—'}</b>\nИсполнитель: <b>{artist or '—'}</b>",
-        reply_markup=batch_edit_kb
-    )
+    await state.set_state(None)
+    await msg.answer("✅ Название обновлено!", reply_markup=batch_edit_kb)
+    await _show_batch_status(msg, state)
 
 
 @dp.callback_query(F.data == "batch_edit_artist")
@@ -271,14 +282,37 @@ async def batch_edit_artist_cb(cb: CallbackQuery, state: FSMContext):
 @dp.message(BatchProcess.waiting_for_artist)
 async def batch_process_artist(msg: Message, state: FSMContext):
     await state.update_data(batch_artist=msg.text)
-    data = await state.get_data()
-    files = data.get("batch_files", [])
-    title = data.get("batch_title", "")
-    artist = data.get("batch_artist", "")
-    await msg.answer(
-        f"📁 {len(files)} файлов\nНазвание: <b>{title or '—'}</b>\nИсполнитель: <b>{artist or '—'}</b>",
-        reply_markup=batch_edit_kb
-    )
+    await state.set_state(None)
+    await msg.answer("✅ Исполнитель обновлён!", reply_markup=batch_edit_kb)
+    await _show_batch_status(msg, state)
+
+
+# ─── Batch: cover ───
+
+@dp.callback_query(F.data == "batch_edit_cover")
+async def batch_edit_cover_cb(cb: CallbackQuery, state: FSMContext):
+    await cb.answer()
+    await cb.message.edit_text("Отправь фото — оно станет обложкой для ВСЕХ файлов в очереди:")
+    await state.set_state(BatchProcess.waiting_for_cover)
+
+
+@dp.message(F.photo, BatchProcess.waiting_for_cover)
+async def batch_process_cover(msg: Message, state: FSMContext):
+    try:
+        file = await bot.get_file(msg.photo[-1].file_id)
+        if not file.file_path:
+            raise ValueError("File path not found")
+        buf = await bot.download_file(file.file_path)
+        if not buf:
+            raise ValueError("Failed to download photo")
+        raw = buf.read()
+        await state.update_data(batch_cover=("image/jpeg", raw))
+        await state.set_state(None)
+        await msg.answer("✅ Обложка установлена для всех файлов!", reply_markup=batch_edit_kb)
+        await _show_batch_status(msg, state)
+    except Exception as e:
+        logger.exception("Batch cover process error")
+        await msg.answer(f"❌ Ошибка: {e}")
 
 
 @dp.callback_query(F.data == "batch_send")
@@ -288,6 +322,7 @@ async def batch_send_cb(cb: CallbackQuery, state: FSMContext):
     files = data.get("batch_files", [])
     btitle = data.get("batch_title", "")
     bartist = data.get("batch_artist", "")
+    bcover = data.get("batch_cover")
 
     if not files:
         await cb.message.edit_text("❌ Нет файлов")
@@ -306,15 +341,20 @@ async def batch_send_cb(cb: CallbackQuery, state: FSMContext):
             ftitle = btitle or item.get("title", fname)
             fartist = bartist or "Unknown"
 
-            logger.info("batch_send item %d: title=%s artist=%s no_cover", i, ftitle, fartist)
-            out = await asyncio.to_thread(apply_metadata, fbuf, ftitle, fartist)
+            logger.info("batch_send item %d: title=%s artist=%s cover=%s",
+                         i, ftitle, fartist, "YES" if bcover else "original")
+            out = await asyncio.to_thread(apply_metadata, fbuf, ftitle, fartist, bcover)
 
             output_name = fname.rsplit(".", 1)[0] + ".mp3"
             edited = out.read()
+
+            kwargs = dict(title=ftitle, performer=fartist)
+            if bcover:
+                kwargs["thumbnail"] = BufferedInputFile(bcover[1], filename="cover.jpg")
+
             await cb.message.answer_audio(
                 BufferedInputFile(edited, filename=output_name),
-                title=ftitle,
-                performer=fartist,
+                **kwargs,
             )
             history.add(cb.from_user.id, ftitle, fartist, edited)
         except Exception as e:
