@@ -44,6 +44,8 @@ async def handle_audio(msg: Message, state: FSMContext):
         if not buf:
             raise ValueError("Failed to download file")
         title, artist, cover = await asyncio.to_thread(read_metadata, buf)
+        cover_log = f"cover={'YES' if cover else 'NONE'} size={len(cover[1]) if cover else 0}"
+        logger.info("handle_audio: title=%s artist=%s %s", title, artist, cover_log)
         await state.update_data(buf=buf, title=title, artist=artist, cover=cover, file_name=file_name)
         await msg.answer(
             f"🎵 <b>{title}</b>\n👤 {artist}\n\nЧто изменить?",
@@ -66,6 +68,7 @@ async def edit_title_cb(cb: CallbackQuery, state: FSMContext):
 @dp.message(EditMetadata.waiting_for_title)
 async def process_title(msg: Message, state: FSMContext):
     await state.update_data(title=msg.text)
+    await state.set_state(None)
     await msg.answer(f"✅ Название: <b>{msg.text}</b>", reply_markup=meta_kb)
 
 
@@ -79,6 +82,7 @@ async def edit_artist_cb(cb: CallbackQuery, state: FSMContext):
 @dp.message(EditMetadata.waiting_for_artist)
 async def process_artist(msg: Message, state: FSMContext):
     await state.update_data(artist=msg.text)
+    await state.set_state(None)
     await msg.answer(f"✅ Исполнитель: <b>{msg.text}</b>", reply_markup=meta_kb)
 
 
@@ -93,12 +97,18 @@ async def edit_cover_cb(cb: CallbackQuery, state: FSMContext):
 async def process_cover(msg: Message, state: FSMContext):
     try:
         file = await bot.get_file(msg.photo[-1].file_id)
+        logger.info("process_cover: got file id=%s path=%s size=%s", file.file_id, file.file_path, file.file_size)
         if not file.file_path:
             raise ValueError("File path not found")
         buf = await bot.download_file(file.file_path)
         if not buf:
             raise ValueError("Failed to download photo")
-        await state.update_data(cover=("image/jpeg", buf.read()))
+        raw = buf.read()
+        logger.info("process_cover: downloaded photo size=%d first_bytes=%s",
+                     len(raw), raw[:50].hex() if raw else "EMPTY")
+        logger.info("process_cover: storing cover=('image/jpeg', %d bytes)", len(raw))
+        await state.update_data(cover=("image/jpeg", raw))
+        await state.set_state(None)
         await msg.answer("✅ Обложка обновлена!", reply_markup=meta_kb)
     except Exception as e:
         logger.exception("Cover process error")
@@ -115,19 +125,32 @@ async def send_audio_cb(cb: CallbackQuery, state: FSMContext):
     cover = data.get("cover")
     file_name = data.get("file_name", "audio.mp3")
 
+    if cover:
+        logger.info("send_audio: cover PRESENT mime=%s data_size=%d first_bytes=%s",
+                     cover[0], len(cover[1]), cover[1][:50].hex() if cover[1] else "EMPTY")
+    else:
+        logger.info("send_audio: cover is None")
+
     await cb.message.edit_text("📝 Обновляю метаданные...")
-    raw = buf.read()
-    buf.seek(0)
-    await asyncio.to_thread(apply_metadata, buf, title, artist, cover)
+    out = await asyncio.to_thread(apply_metadata, buf, title, artist, cover)
 
     await cb.message.edit_text("📤 Отправляю...")
     output_name = file_name.rsplit(".", 1)[0] + ".mp3"
-    await cb.message.answer_audio(
-        BufferedInputFile(buf.read(), filename=output_name),
+    edited = out.read()
+
+    kwargs = dict(
         title=title,
         performer=artist,
     )
-    history.add(cb.from_user.id, title, artist, raw)
+    if cover:
+        kwargs["thumbnail"] = BufferedInputFile(cover[1], filename="cover.jpg")
+        logger.info("send_audio: adding thumbnail %d bytes", len(cover[1]))
+
+    await cb.message.answer_audio(
+        BufferedInputFile(edited, filename=output_name),
+        **kwargs,
+    )
+    history.add(cb.from_user.id, title, artist, edited)
     await state.clear()
 
 
@@ -283,16 +306,17 @@ async def batch_send_cb(cb: CallbackQuery, state: FSMContext):
             ftitle = btitle or item.get("title", fname)
             fartist = bartist or "Unknown"
 
-            raw = fbuf.read()
-            await asyncio.to_thread(apply_metadata, fbuf, ftitle, fartist)
+            logger.info("batch_send item %d: title=%s artist=%s no_cover", i, ftitle, fartist)
+            out = await asyncio.to_thread(apply_metadata, fbuf, ftitle, fartist)
 
             output_name = fname.rsplit(".", 1)[0] + ".mp3"
+            edited = out.read()
             await cb.message.answer_audio(
-                BufferedInputFile(fbuf.read(), filename=output_name),
+                BufferedInputFile(edited, filename=output_name),
                 title=ftitle,
                 performer=fartist,
             )
-            history.add(cb.from_user.id, ftitle, fartist, raw)
+            history.add(cb.from_user.id, ftitle, fartist, edited)
         except Exception as e:
             logger.exception("Batch item %d error", i)
             await cb.message.answer(f"❌ Ошибка в файле #{i}: {e}")
