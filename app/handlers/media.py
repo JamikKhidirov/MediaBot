@@ -119,7 +119,11 @@ async def process_cover(msg: Message, state: FSMContext):
 async def send_audio_cb(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     data = await state.get_data()
-    buf = data["buf"]
+    buf = data.get("buf")
+    if buf is None:
+        await cb.message.edit_text("❌ Файл не найден. Отправь MP3 заново.")
+        await state.clear()
+        return
     title = data.get("title", "Unknown")
     artist = data.get("artist", "Unknown")
     cover = data.get("cover")
@@ -160,7 +164,11 @@ async def send_audio_cb(cb: CallbackQuery, state: FSMContext):
 async def add_to_batch_cb(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
     data = await state.get_data()
-    buf = data["buf"]
+    buf = data.get("buf")
+    if buf is None:
+        await cb.message.edit_text("❌ Файл не найден. Отправь MP3 заново.")
+        await state.clear()
+        return
     title = data.get("title", data.get("file_name", "audio.mp3"))
     file_name = data.get("file_name", "audio.mp3")
 
