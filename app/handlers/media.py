@@ -368,3 +368,16 @@ async def batch_send_cb(cb: CallbackQuery, state: FSMContext):
 
     await state.clear()
     await cb.message.delete()
+
+
+@dp.message(F.text)
+async def fallback_text(msg: Message, state: FSMContext):
+    if msg.text.startswith("/"):
+        return
+    await msg.answer(
+        "❓ Отправь MP3 файл, чтобы изменить его метаданные\n\n"
+        "Команды:\n"
+        "/start — главное меню\n"
+        "/history — последние 5 песен\n"
+        "/cancel — отменить"
+    )
